@@ -510,3 +510,33 @@ Requires runtime Ke computation at plastic GPs.
 | Accuracy | |u| 7.5%, sxx 1.11× | |u| 7.3%, sxx 0.95× (**improved**) |
 
 Steps A(Jacobi)✅ B(tol 1e-4)✅ C(skip elastic Newton: automatic)✅ D(skip soft: unsafe)❌ E(symmetric Ke: diminishing returns)❌
+
+---
+
+## Final Summary
+
+### Performance (P=100W, 50×20×5 HEX8, 500 time steps)
+| Metric | JAX-FEM (GPU) | Fortran EBE+Newton (20-thread OpenMP) | Speedup |
+|--------|---------------|---------------------------------------|---------|
+| **Total wall time** | 374 s | **19 s** | **20×** |
+| **Peak memory** | 4,882 MB | **8 MB** | **611×** |
+| Thermal total | 253 s | 0.7 s | **361×** |
+| Thermal per step | 505 ms | 1.4 ms | **361×** |
+| Mechanical total | 85 s | 16 s | **5×** |
+| Mechanical per step | 1,706 ms | 320 ms | **5×** |
+| → CG avg iters | ~500 | 135 (Jacobi precond) | **3.7×** |
+| Overhead (JIT/IO) | 37 s | 2.6 s | **14×** |
+
+### Accuracy (step 500, compared to JAX-FEM)
+| Field | Error |
+|-------|-------|
+| Temperature | **~1%** mean relative error |
+| Displacement \|u\| | **7.3%** |
+| Stress σ_xx | **0.95×** (5% error) |
+
+### Key Achievements
+1. Found and fixed bug in JAX-FEM example (`atol=1e-5` → `atol=1e-6`)
+2. EBE FEM = exact FEM for thermal (0.015% error at step 9)
+3. Newton iteration with GP-level stress history matches JAX-FEM stress within 5%
+4. Jacobi-preconditioned CG reduces mechanical CG iterations from 566 to 135
+5. 20× faster, 611× less memory than JAX-FEM
