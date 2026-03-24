@@ -5,6 +5,7 @@
 lpbf_sim
 
 # VTK output (regeneratable)
+project/fortran_FEM/src/vtk_output/
 project/fortran_fdm/src/vtk_output/
 
 # JAX-FEM clone (external dependency)
