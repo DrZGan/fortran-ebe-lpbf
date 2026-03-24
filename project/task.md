@@ -322,8 +322,9 @@ To ensure FDM and FEM solve the same equations and produce the same results:
 | **Peak memory** | 4,882 MB | 8 MB | **611×** |
 | Thermal total | 253 s | 0.7 s | **361×** |
 | Thermal per step | 505 ms | 1.4 ms | **361×** |
-| Mechanical total | 85 s | 16 s | **5.3×** |
-| Mechanical per step | 1,706 ms | 320 ms | **5.3×** |
+| Mechanical total | 85 s | 16 s | **5×** |
+| Mechanical per step | 1,706 ms | 320 ms | **5×** |
+| → CG avg iters | ~500 | 135 (Jacobi precond) | **3.7×** |
 | Overhead (JIT/IO) | 37 s | 2.6 s | **14×** |
 
 ### 5.2 Accuracy Comparison
