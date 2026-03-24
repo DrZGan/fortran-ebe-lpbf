@@ -475,3 +475,25 @@ Requires runtime Ke computation at plastic GPs.
 | 2 | Newton with σ_old | σ_xx: ~1.1×, \|u\|: ~3% | ~400 ms/step | **DO NEXT** |
 | 3 | GP-centered phase | Minor improvement | ~400 ms/step | After Step 2 |
 | 4 | Plastic tangent | <1% improvement | ~500 ms/step | Only if needed |
+
+---
+
+## Phase 7: Mechanical Solver Speed Optimization
+
+### Profiling Results (P=100W)
+- Newton: 1 iteration (elastic, not a bottleneck)
+- CG: 490 solves, avg **566 iters/solve**, total **277K iterations**
+- Each CG iter ≈ 0.2ms (1 EBE matvec over 5000 elements)
+- Mechanical total: 57.1s = 98% of total 60.2s
+
+### Optimization Plan (ordered by impact/cost)
+
+| Step | Fix | Expected speedup | Difficulty |
+|------|-----|-----------------|------------|
+| A | Jacobi preconditioner for CG | CG iters 566→~200 (**2.5×**) | Simple |
+| B | Relax CG tolerance 1e-6→1e-4 | CG iters -30% | 1 parameter |
+| C | Skip Newton for elastic steps | Save residual computation | Simple |
+| D | Skip all-soft elements in matvec | matvec -15% (4204/5000 soft) | Simple |
+| E | Symmetric Ke upper-triangle | matvec -40% | Moderate |
+
+**Target**: Mech from 57s → ~15-20s, total from 60s → ~20s

@@ -753,12 +753,41 @@ contains
     integer,  intent(in)    :: phase(Nnx,Nny,Nnz)
 
     real(dp) :: rx(Nnx,Nny,Nnz), ry(Nnx,Nny,Nnz), rz(Nnx,Nny,Nnz)
+    real(dp) :: zx(Nnx,Nny,Nnz), zy(Nnx,Nny,Nnz), zz_arr(Nnx,Nny,Nnz)
     real(dp) :: px(Nnx,Nny,Nnz), py(Nnx,Nny,Nnz), pz(Nnx,Nny,Nnz)
     real(dp) :: Apx(Nnx,Nny,Nnz), Apy(Nnx,Nny,Nnz), Apz(Nnx,Nny,Nnz)
-    real(dp) :: rr_old, rr_new, pAp, alpha_cg, beta_cg, rnorm, bnorm
-    integer  :: iter
+    ! Jacobi preconditioner: inverse of diagonal (same for ux,uy,uz by isotropy)
+    real(dp) :: diag_inv(Nnx,Nny,Nnz)
+    real(dp) :: rz_old, rz_new, pAp, alpha_cg, beta_cg, rnorm, bnorm
+    integer  :: iter, ie, je, ke, di, dj, dk, ln, dof
 
     rnorm = 0.0_dp
+
+    ! --- Jacobi preconditioner: assemble diagonal of K via EBE ---
+    ! diag(K) at node = sum over elements sharing node of Ke(dof,dof)
+    ! For ux: dof = 3*(ln-1)+1 where ln is local node index
+    diag_inv = 0.0_dp
+    do ke = 1, Nz
+      do je = 1, Ny
+        do ie = 1, Nx
+          do dk = 0, 1; do dj = 0, 1; do di = 0, 1
+            ln = 1 + di + 2*dj + 4*dk
+            dof = 3*(ln-1) + 1  ! ux diagonal (same for uy, uz by isotropy)
+            if (elem_phase(ie,je,ke) /= PHASE_POWDER) then
+              diag_inv(ie+di,je+dj,ke+dk) = diag_inv(ie+di,je+dj,ke+dk) + Ke_solid(dof,dof)
+            else
+              diag_inv(ie+di,je+dj,ke+dk) = diag_inv(ie+di,je+dj,ke+dk) + Ke_soft(dof,dof)
+            end if
+          end do; end do; end do
+        end do
+      end do
+    end do
+    where (diag_inv > 1.0e-30_dp)
+      diag_inv = 1.0_dp / diag_inv
+    elsewhere
+      diag_inv = 1.0_dp
+    end where
+    diag_inv(:,:,1) = 1.0_dp  ! Dirichlet
 
     ! Enforce Dirichlet on initial guess
     ux(:,:,1) = 0.0_dp; uy(:,:,1) = 0.0_dp; uz(:,:,1) = 0.0_dp
@@ -766,9 +795,12 @@ contains
     ! r = f - A*u
     call ebe_matvec_mech(ux, uy, uz, Apx, Apy, Apz, phase)
     rx = fx - Apx; ry = fy - Apy; rz = fz - Apz
-    px = rx; py = ry; pz = rz
 
-    rr_old = sum(rx*rx) + sum(ry*ry) + sum(rz*rz)
+    ! z = M^{-1} r (Jacobi preconditioner)
+    zx = diag_inv * rx; zy = diag_inv * ry; zz_arr = diag_inv * rz
+    px = zx; py = zy; pz = zz_arr
+
+    rz_old = sum(rx*zx) + sum(ry*zy) + sum(rz*zz_arr)
     bnorm  = sqrt(sum(fx*fx) + sum(fy*fy) + sum(fz*fz))
     if (bnorm < 1.0e-30_dp) return
 
@@ -776,31 +808,22 @@ contains
       call ebe_matvec_mech(px, py, pz, Apx, Apy, Apz, phase)
       pAp = sum(px*Apx) + sum(py*Apy) + sum(pz*Apz)
       if (abs(pAp) < 1.0e-30_dp) exit
-      alpha_cg = rr_old / pAp
+      alpha_cg = rz_old / pAp
 
-      ux = ux + alpha_cg * px
-      uy = uy + alpha_cg * py
-      uz = uz + alpha_cg * pz
+      ux = ux + alpha_cg * px; uy = uy + alpha_cg * py; uz = uz + alpha_cg * pz
+      rx = rx - alpha_cg * Apx; ry = ry - alpha_cg * Apy; rz = rz - alpha_cg * Apz
 
-      rx = rx - alpha_cg * Apx
-      ry = ry - alpha_cg * Apy
-      rz = rz - alpha_cg * Apz
+      ! Precondition
+      zx = diag_inv * rx; zy = diag_inv * ry; zz_arr = diag_inv * rz
 
-      rr_new = sum(rx*rx) + sum(ry*ry) + sum(rz*rz)
-      rnorm = sqrt(rr_new)
-
+      rnorm = sqrt(sum(rx*rx) + sum(ry*ry) + sum(rz*rz))
       if (rnorm / bnorm < cg_tol_mech) exit
 
-      beta_cg = rr_new / rr_old
-      px = rx + beta_cg * px
-      py = ry + beta_cg * py
-      pz = rz + beta_cg * pz
-      rr_old = rr_new
+      rz_new = sum(rx*zx) + sum(ry*zy) + sum(rz*zz_arr)
+      beta_cg = rz_new / rz_old
+      px = zx + beta_cg * px; py = zy + beta_cg * py; pz = zz_arr + beta_cg * pz
+      rz_old = rz_new
     end do
-
-    if (iter >= cg_maxiter_mech) then
-      write(*,'(A,I6,A,ES10.3)') '  WARNING: Mech CG did NOT converge, iter=', iter, ' res=', rnorm/bnorm
-    end if
 
     ! Re-enforce Dirichlet
     ux(:,:,1) = 0.0_dp; uy(:,:,1) = 0.0_dp; uz(:,:,1) = 0.0_dp
@@ -836,7 +859,10 @@ contains
       R_norm = sqrt(sum(Rx**2) + sum(Ry**2) + sum(Rz**2))
       if (newton_iter == 1) R_norm0 = R_norm
 
-      if (R_norm / max(R_norm0, 1.0e-30_dp) < newton_tol) exit
+      if (R_norm / max(R_norm0, 1.0e-30_dp) < newton_tol) then
+        write(*,'(A,I2,A,ES9.2)') '    Newton converged iter=', newton_iter, ' R/R0=', R_norm/max(R_norm0,1e-30_dp)
+        exit
+      end if
 
       ! Solve K * du = -R using elastic K as Jacobian via EBE CG
       dux = 0.0_dp; duy = 0.0_dp; duz = 0.0_dp

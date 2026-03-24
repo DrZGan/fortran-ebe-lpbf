@@ -72,7 +72,7 @@ module mod_parameters
   ! ============================================================
   real(dp), parameter :: cg_tol_thermal = 1.0e-8_dp
   integer, parameter  :: cg_maxiter_thermal = 5000
-  real(dp), parameter :: cg_tol_mech = 1.0e-6_dp
+  real(dp), parameter :: cg_tol_mech = 1.0e-4_dp   ! relaxed from 1e-6 (Step B)
   integer, parameter  :: cg_maxiter_mech = 20000
   integer, parameter  :: newton_maxiter = 10
   real(dp), parameter :: newton_tol = 1.0e-4_dp
