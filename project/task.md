@@ -343,16 +343,7 @@ To ensure FDM and FEM solve the same equations and produce the same results:
    - Switched from FDM Navier stencil to EBE with 24×24 element stiffness
    - Per-GP thermal force interpolation (not average ΔT)
    - Incremental displacement accumulation across mechanical steps
-6. **Remaining |u| gap (~10-40%)** — Three root causes identified:
-   - **No Newton iteration**: Our linear `K*du = F_thermal` doesn't account for σ_old in the equilibrium.
-     When material transitions LIQUID→SOLID, accumulated stress should redistribute as a body force.
-     JAX-FEM's Newton computes `R(u) = ∫σ(u,σ_old,ε_old,ΔT):∇v dV = 0`, solving the full nonlinear system.
-   - **Node-centered vs GP-centered phase**: FEM 722 SOLID cells vs EBE 681 SOLID nodes at step 500.
-     Different SOLID geometry → different stiffness distribution → different deformation patterns.
-   - **Plasticity not fed back**: FEM has 114 plastic cells (2.3%), max stress at 87% of yield.
-     Return mapping changes effective stiffness; our code does return mapping as post-processing only.
-   - **Fix**: Implement Newton iteration: (1) compute full residual including σ_old, (2) assemble tangent
-     stiffness per-element (elastic or plastic C_tangent per GP), (3) solve for Δu, (4) repeat until converged.
+6. **Remaining mechanical gap** — see Phase 6 plan below.
 
 ---
 
@@ -376,3 +367,108 @@ To ensure FDM and FEM solve the same equations and produce the same results:
 | 2026-03-23 | **Final performance**: 8.1s total (93x faster than JAX-FEM's 754s) | Thermal: 438x faster, Mechanical: 49x faster, Memory: 1500x less |
 | 2026-03-23 | Fixed mechanical solver: per-GP thermal force + incremental displacement accumulation | Displacement within 16-20%, f_plus within 5.7% |
 | 2026-03-23 | Fixed VTK save timing: save T_old (pre-solve) to match JAX-FEM convention | Step 250 temperature mystery resolved — was a 1-step offset at laser-off transition |
+
+---
+
+## Phase 6: Close the Mechanical Gap — Step-by-Step Plan
+
+### Current Errors (P=100W, Step 500)
+| Metric | FEM | EBE | Error |
+|--------|-----|-----|-------|
+| \|u\| max | 2.05e-6 | 1.83e-6 | **10.9%** |
+| \|σ_xx\| max | 217 MPa | 379 MPa | **1.75×** |
+| f_plus max | 4.08 MPa | 4.28 MPa | **4.9%** |
+| von Mises (plastic) | 250-254 MPa | 250-254 MPa | **exact** |
+
+### Error Source Breakdown
+| Source | Affected elements | Stiffness error | Impact |
+|--------|-------------------|-----------------|--------|
+| Binary element phase | 476 MIXED elements (9.5%) | Up to 7.5× too stiff | **HIGH** — main cause of σ_xx 1.75× |
+| No σ_old in equilibrium | All SOLID elements at phase transition | Missing body force | **MEDIUM** — causes drift in accumulated u |
+| Plastic tangent not fed back | 114 cells (2.3%) | ~10% softer effective C | **LOW** — small plastic zone |
+
+### Step 1: Per-GP Phase in Element Stiffness [HIGH impact, ZERO speed cost]
+
+**Problem**: 476 MIXED elements (some nodes SOLID, some not) currently get full Ke_solid.
+A 1-SOLID-node element should have stiffness ≈ (1/8)·Ke_solid + (7/8)·Ke_soft, not Ke_solid.
+
+**Fix**: Precompute 8 per-GP stiffness contributions:
+```
+Ke_solid = Σ_{gp=1}^{8} Ke_gp_solid    (each Ke_gp is a 24×24 matrix)
+Ke_soft  = Σ_{gp=1}^{8} Ke_gp_soft
+```
+At runtime for MIXED elements:
+```
+Ke_mixed = Σ_{gp=1}^{8} ( if phase(node_gp)==SOLID: Ke_gp_solid else Ke_gp_soft )
+```
+Since GP g is closest to node g (for 2×2×2 Gauss on HEX8), use node phase directly.
+
+**Memory**: Store Ke_gp_solid(24,24,8) and Ke_gp_soft(24,24,8) = 2 × 8 × 576 = 9216 doubles = 72 KB.
+**Speed**: Same matvec cost (still 24×24 per element). Only MIXED elements need runtime Ke assembly.
+**Expected result**: σ_xx ratio drops from 1.75× to ~1.1-1.2×.
+
+**Validation**: Compare σ_xx at step 500. Target: ratio < 1.3×.
+
+### Step 2: Newton Residual with σ_old [MEDIUM impact, 2-3× cost per mech step]
+
+**Problem**: Our `K*du = F_thermal` doesn't account for stress imbalance when phase changes.
+When an element transitions soft→SOLID, the existing displacement (from previous soft K) creates
+a stress σ = C_solid · ε(u) that is NOT in equilibrium. JAX-FEM's Newton resolves this.
+
+**Fix**: Instead of `K*du = F_thermal`, compute the full Newton residual:
+```
+R(u) = Σ_e ∫ σ(u, σ_old, ε_old, ΔT, phase) : ∇v dV
+```
+Then solve: `K · Δu = -R(u_current)`, update: `u = u + Δu`, repeat until `||R|| < tol`.
+
+Implementation:
+1. Add `compute_residual(u, σ_old, ε_old, ΔT, phase) → R` using EBE assembly
+   - Same structure as `ebe_matvec_mech` but computes σ at each GP via return mapping
+   - σ_gp = σ_old_gp + C_gp : (ε(u)_gp - ε_old_gp - ε_thermal_gp)
+   - R_e = Σ_gp B_gp^T · σ_gp · detJ · w
+2. Newton loop: 2-3 iterations (linear elastic converges in 1, plastic in 2-3)
+3. Use elastic K as Jacobian (avoids computing plastic tangent)
+
+**Speed**: Each Newton iteration = 1 residual computation + 1 CG solve ≈ 2× current mech cost.
+With 2-3 iterations: total ~3-4× current mech step (from 120ms to ~400ms). Still 10× faster than JAX-FEM.
+**Expected result**: |u| error drops from ~11% to ~3-5%.
+
+**Validation**: Compare |u| centerline at step 500. Target: ratio within 0.95-1.05.
+
+### Step 3: GP-Centered Phase (instead of node-centered) [LOW impact, ZERO speed cost]
+
+**Problem**: EBE has 681 SOLID nodes, FEM has 722 SOLID cells. Different SOLID geometry.
+JAX-FEM evaluates phase at quadrature points via shape function interpolation of T.
+
+**Fix**: Store phase per GP (8 per element) instead of per node.
+At each mechanical step: interpolate T at each GP using shape functions, evaluate phase transitions.
+
+**Speed**: Negligible — phase update is already fast.
+**Expected result**: Small improvement in phase boundary accuracy.
+
+**Validation**: Compare SOLID cell count with FEM.
+
+### Step 4: Plastic Tangent in Jacobian [VERY LOW impact, HIGH cost]
+
+**Problem**: 114 plastic cells (2.3%) have softened tangent. Using elastic K overestimates stiffness.
+
+**Fix**: At yielded GPs, use the consistent tangent modulus:
+```
+C_tangent = C_elastic - (correction from return mapping)
+```
+Requires runtime Ke computation at plastic GPs.
+
+**Speed**: Only needed at plastic GPs (~2.3% of elements). Can use elastic K for others.
+**Expected result**: Minor improvement (<1%).
+
+**Decision**: Skip unless Steps 1-3 leave residual error > 5%.
+
+### Execution Order and Checkpoints
+
+| Step | Fix | Expected error after | Speed | Checkpoint |
+|------|-----|---------------------|-------|------------|
+| 0 (current) | — | σ_xx: 1.75×, \|u\|: 11% | 120 ms/step | — |
+| 1 | Per-GP phase Ke | σ_xx: ~1.2×, \|u\|: ~8% | 120 ms/step | σ_xx ratio < 1.3 |
+| 2 | Newton with σ_old | σ_xx: ~1.1×, \|u\|: ~3% | ~400 ms/step | \|u\| ratio 0.95-1.05 |
+| 3 | GP-centered phase | σ_xx: ~1.05×, \|u\|: ~2% | ~400 ms/step | Phase count match |
+| 4 | Plastic tangent | σ_xx: ~1.02×, \|u\|: ~1% | ~500 ms/step | Only if needed |
