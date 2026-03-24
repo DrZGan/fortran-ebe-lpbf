@@ -315,13 +315,13 @@ To ensure FDM and FEM solve the same equations and produce the same results:
     - **To match exactly**: would need Newton iteration with EBE tangent stiffness update
 - [x] Phase 5: Comparison ✅
 
-### 5.1 Performance Comparison (Final)
-| Metric | JAX-FEM (GPU, fixed atol) | Fortran EBE (20-thread OpenMP) | Speedup |
-|--------|---------------------------|--------------------------------|---------|
-| Total runtime | **754 s** | **8.1 s** | **93x** |
-| Thermal solve | 525 ms/step | 1.2 ms/step | **438x** |
-| Mechanical solve | 4952 ms/step | 102 ms/step | **49x** |
-| Memory | ~3 GB | ~2 MB | **~1500x** |
+### 5.1 Performance Comparison (Final, P=100W)
+| Metric | JAX-FEM (GPU, fixed atol) | Fortran EBE+Newton (20-thread OpenMP) |
+|--------|---------------------------|---------------------------------------|
+| Total runtime | **381.6 s** | **60.2 s (6.3× faster)** |
+| Peak memory | **4,881 MB** | **8 MB (610× less)** |
+| Thermal solve | ~500 ms/step | 1.4 ms/step |
+| Mechanical solve | ~7000 ms/step | 1142 ms/step |
 
 ### 5.2 Accuracy Comparison
 | Field | Metric | Result |
