@@ -858,31 +858,43 @@ contains
   ! sxx_out: average sig_gp(1,...) over GPs mapped to nearest node
   ! fplus_out: accumulated f_plus
   ! ============================================================
-  subroutine get_stress_yield(sxx_out, fplus_out)
+  subroutine get_stress_yield(sxx_out, fplus_out, phase_arr)
     real(dp), intent(out) :: sxx_out(Nnx,Nny,Nnz), fplus_out(Nnx,Nny,Nnz)
+    integer,  intent(in)  :: phase_arr(Nnx,Nny,Nnz)
     integer :: ie, je, ke, g, di, dj, dk
     integer :: cnt(Nnx,Nny,Nnz)
 
     sxx_out = 0.0_dp
     cnt = 0
 
-    ! Scatter GP sxx to nearest node — only from SOLID elements
-    ! This avoids oscillation at phase boundaries where averaging
-    ! SOLID GP stress with near-zero soft GP stress creates artifacts
-    do ke = 1, Nz
-      do je = 1, Ny
-        do ie = 1, Nx
-          if (elem_phase(ie,je,ke) /= PHASE_SOLID) cycle
-          do g = 1, 8
-            di = mod(g-1, 2)
-            dj = mod((g-1)/2, 2)
-            dk = (g-1) / 4
-            sxx_out(ie+di, je+dj, ke+dk) = sxx_out(ie+di, je+dj, ke+dk) + sig_gp(1, g, ie, je, ke)
-            cnt(ie+di, je+dj, ke+dk) = cnt(ie+di, je+dj, ke+dk) + 1
+    ! Two-step smoothing (matches JAX-FEM cell_data_to_point_data):
+    ! 1. Compute element-average sxx (= cell-centered value)
+    ! 2. Scatter cell-average to nodes (each node averages its elements)
+    ! This is equivalent to ParaView's CellDataToPointData filter.
+    block
+      real(dp) :: sxx_elem
+      do ke = 1, Nz
+        do je = 1, Ny
+          do ie = 1, Nx
+            ! Element average of 8 GP sxx values
+            sxx_elem = 0.0_dp
+            do g = 1, 8
+              sxx_elem = sxx_elem + sig_gp(1, g, ie, je, ke)
+            end do
+            sxx_elem = sxx_elem / 8.0_dp
+            ! Scatter this single value to all 8 element nodes
+            do dk = 0, 1
+              do dj = 0, 1
+                do di = 0, 1
+                  sxx_out(ie+di, je+dj, ke+dk) = sxx_out(ie+di, je+dj, ke+dk) + sxx_elem
+                  cnt(ie+di, je+dj, ke+dk) = cnt(ie+di, je+dj, ke+dk) + 1
+                end do
+              end do
+            end do
           end do
         end do
       end do
-    end do
+    end block
 
     where (cnt > 0)
       sxx_out = sxx_out / dble(cnt)

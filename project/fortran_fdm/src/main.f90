@@ -106,7 +106,7 @@ program lpbf_simulation
       wall_mech = wall_mech + dble(t2 - t1) / dble(clock_rate)
 
       ! Output — save T_old (pre-solve T, matching JAX-FEM's sol_T_old convention)
-      call get_stress_yield(sxx_out, fplus_out)
+      call get_stress_yield(sxx_out, fplus_out, phase)
       write(vtk_filename, '(A,A,I6.6,A)') trim(vtk_dir), '/fdm_', step, '.vts'
       call write_vtk(trim(vtk_filename), T_old, ux, uy, uz, phase, sxx_out, fplus_out)
 
