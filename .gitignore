@@ -1,0 +1,25 @@
+# Build artifacts
+*.o
+*.mod
+*.exe
+lpbf_sim
+
+# VTK output (regeneratable)
+project/fortran_fdm/src/vtk_output/
+
+# JAX-FEM clone (external dependency)
+project/jax-fem/
+
+# Python environments
+project/jax-fem-venv/
+project/micromamba/
+
+# Logs
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Editor
+.vscode/
