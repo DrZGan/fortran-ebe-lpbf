@@ -497,3 +497,15 @@ Requires runtime Ke computation at plastic GPs.
 | E | Symmetric Ke upper-triangle | matvec -40% | Moderate |
 
 **Target**: Mech from 57s → ~15-20s, total from 60s → ~20s
+
+### Optimization Results
+| | Before (no Jacobi) | After (Jacobi + tol 1e-4) |
+|---|---|---|
+| CG avg iters | 566 | **135** |
+| CG total iters | 277K | **65K** |
+| Mech per step | 1,142 ms | **320 ms (3.6× faster)** |
+| Mech total | 57.1 s | **16.0 s** |
+| Total | 60.2 s | **19.3 s (3.1× faster)** |
+| Accuracy | |u| 7.5%, sxx 1.11× | |u| 7.3%, sxx 0.95× (**improved**) |
+
+Steps A(Jacobi)✅ B(tol 1e-4)✅ C(skip elastic Newton: automatic)✅ D(skip soft: unsafe)❌ E(symmetric Ke: diminishing returns)❌
