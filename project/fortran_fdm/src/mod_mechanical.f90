@@ -866,10 +866,13 @@ contains
     sxx_out = 0.0_dp
     cnt = 0
 
-    ! Scatter GP sxx to nearest node, then average
+    ! Scatter GP sxx to nearest node — only from SOLID elements
+    ! This avoids oscillation at phase boundaries where averaging
+    ! SOLID GP stress with near-zero soft GP stress creates artifacts
     do ke = 1, Nz
       do je = 1, Ny
         do ie = 1, Nx
+          if (elem_phase(ie,je,ke) /= PHASE_SOLID) cycle
           do g = 1, 8
             di = mod(g-1, 2)
             dj = mod((g-1)/2, 2)
