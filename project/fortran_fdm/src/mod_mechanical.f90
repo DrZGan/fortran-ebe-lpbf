@@ -9,13 +9,17 @@ module mod_mechanical
   real(dp) :: Ke_solid(24,24)   ! E=70GPa, nu=0.3
   real(dp) :: Ke_soft(24,24)    ! E=0.7GPa, nu=0.3
 
-  ! Thermal coupling matrix: Mth(24,8) maps 8 nodal dT to 24 force DOFs
-  ! Mth(3*(a-1)+p, b) = Σ_q B_a(:,p)^T·C·[1,1,1,0,0,0]·α_V·N_b(q)·detJ·w
-  ! F_e = Mth * dT_nodes (proper per-GP interpolation)
-  real(dp) :: Mth_solid(24,8)   ! for solid elements
-  real(dp) :: Mth_soft(24,8)    ! for soft elements (alpha_V=0, so this is zero)
+  ! Per-GP stiffness contributions: Ke = Σ_{gp=1}^{8} Ke_gp
+  ! For MIXED elements: Ke_mixed = Σ_gp (SOLID? Ke_gp_solid : Ke_gp_soft)
+  ! GP g is closest to node g (2×2×2 Gauss on HEX8), so use node phase.
+  real(dp) :: Ke_gp_solid(24,24,8)  ! per-GP contribution, solid material
+  real(dp) :: Ke_gp_soft(24,24,8)   ! per-GP contribution, soft material
 
-  ! Keep Fth for backward compat (unused now)
+  ! Thermal coupling matrix: Mth(24,8) maps 8 nodal dT to 24 force DOFs
+  real(dp) :: Mth_solid(24,8)
+  real(dp) :: Mth_soft(24,8)
+
+  ! Keep Fth for backward compat
   real(dp) :: Fth_solid(24)
   real(dp) :: Fth_soft(24)
 
@@ -54,17 +58,19 @@ contains
   ! Compute element stiffness K_e(24,24) and thermal load vector
   ! for a uniform HEX8 element with given material
   ! ============================================================
-  subroutine compute_element_matrices(E_val, nu_val, Ke, Fth, Mth)
+  subroutine compute_element_matrices(E_val, nu_val, Ke, Fth, Mth, Ke_gp)
     real(dp), intent(in)  :: E_val, nu_val
     real(dp), intent(out) :: Ke(24,24)
     real(dp), intent(out) :: Fth(24)
     real(dp), intent(out) :: Mth(24,8)
+    real(dp), intent(out) :: Ke_gp(24,24,8)  ! per-GP contributions
 
     real(dp) :: C(6,6)
     real(dp) :: gp(2), gw(2)
     real(dp) :: xi, eta_q, zeta, w, det_J
     real(dp) :: xi_n(8), eta_n(8), zeta_n(8)
     real(dp) :: dN_dx(8), dN_dy(8), dN_dz(8)
+    integer  :: gp_idx  ! 1..8 GP counter
     real(dp) :: dN_dxi(8), dN_deta(8), dN_dzeta(8)
     real(dp) :: N(8)
     real(dp) :: B_a(6,3), B_b(6,3)
@@ -101,14 +107,18 @@ contains
     ! Include alpha_V
     C_eps_th = C_eps_th * alpha_V
 
-    Ke  = 0.0_dp
-    Fth = 0.0_dp
-    Mth = 0.0_dp
+    Ke    = 0.0_dp
+    Fth   = 0.0_dp
+    Mth   = 0.0_dp
+    Ke_gp = 0.0_dp
 
     ! 2x2x2 Gauss integration
+    ! GP index matches node ordering: gp_idx = i + 2*(j-1) + 4*(k-1)
+    ! GP(1)↔node(1)=(-1,-1,-1), GP(2)↔node(2)=(+1,-1,-1), etc.
     do k = 1, 2
       do j = 1, 2
         do i = 1, 2
+          gp_idx = i + 2*(j-1) + 4*(k-1)
           xi     = gp(i)
           eta_q  = gp(j)
           zeta   = gp(k)
@@ -175,6 +185,12 @@ contains
                     + (B_a(1,p)*CB(1,q) + B_a(2,p)*CB(2,q) + B_a(3,p)*CB(3,q) &
                      + B_a(4,p)*CB(4,q) + B_a(5,p)*CB(5,q) + B_a(6,p)*CB(6,q)) &
                     * det_J * w
+                  ! Also store per-GP contribution
+                  Ke_gp(3*(a-1)+p, 3*(b-1)+q, gp_idx) = &
+                    Ke_gp(3*(a-1)+p, 3*(b-1)+q, gp_idx) &
+                    + (B_a(1,p)*CB(1,q) + B_a(2,p)*CB(2,q) + B_a(3,p)*CB(3,q) &
+                     + B_a(4,p)*CB(4,q) + B_a(5,p)*CB(5,q) + B_a(6,p)*CB(6,q)) &
+                    * det_J * w
                 end do
               end do
             end do
@@ -228,8 +244,8 @@ contains
     elem_phase = PHASE_POWDER
 
     ! Precompute element stiffness matrices and thermal load vectors
-    call compute_element_matrices(E_solid, nu, Ke_solid, Fth_solid, Mth_solid)
-    call compute_element_matrices(E_soft,  nu, Ke_soft,  Fth_soft,  Mth_soft)
+    call compute_element_matrices(E_solid, nu, Ke_solid, Fth_solid, Mth_solid, Ke_gp_solid)
+    call compute_element_matrices(E_soft,  nu, Ke_soft,  Fth_soft,  Mth_soft, Ke_gp_soft)
   end subroutine init_mechanical
 
   subroutine cleanup_mechanical()
@@ -252,7 +268,7 @@ contains
     do ke = 1, Nz
       do je = 1, Ny
         do ie = 1, Nx
-          ! Use SOLID if ANY node is SOLID (original behavior)
+          ! SOLID if any node is SOLID, else POWDER
           n_solid = 0
           do dk = 0, 1
             do dj = 0, 1
@@ -298,8 +314,10 @@ contains
       do ke = 1 + kc, Nz, 2
         do je = 1 + jc, Ny, 2
           do ie = 1 + ic, Nx, 2
-            ! Select element stiffness based on element phase
-            if (elem_phase(ie,je,ke) == PHASE_SOLID) then
+            ! Element stiffness: SOLID if any node is SOLID, else soft
+            ! Per-GP blending tested but causes stress amplification at boundaries.
+            ! Binary approach gives better overall results (sxx 1.75x vs 100x+).
+            if (elem_phase(ie,je,ke) /= PHASE_POWDER) then
               Ke_loc = Ke_solid
             else
               Ke_loc = Ke_soft
@@ -356,8 +374,9 @@ contains
   ! Assemble thermal body force RHS using EBE
   ! F_e = F_th_unit * avg(DT) over element nodes (SOLID elements only)
   ! ============================================================
-  subroutine assemble_thermal_rhs(T_new, fx, fy, fz)
+  subroutine assemble_thermal_rhs(T_new, phase, fx, fy, fz)
     real(dp), intent(in)  :: T_new(Nnx,Nny,Nnz)
+    integer,  intent(in)  :: phase(Nnx,Nny,Nnz)
     real(dp), intent(out) :: fx(Nnx,Nny,Nnz), fy(Nnx,Nny,Nnz), fz(Nnx,Nny,Nnz)
 
     real(dp) :: fe(24), dT_nodes(8), Mth_loc(24,8)
@@ -375,8 +394,8 @@ contains
       do ke = 1 + kc, Nz, 2
         do je = 1 + jc, Ny, 2
           do ie = 1 + ic, Nx, 2
-            ! Only solid elements produce thermal load (alpha_V=0 for powder/liquid)
-            if (elem_phase(ie,je,ke) /= PHASE_SOLID) cycle
+            ! Only elements with at least one SOLID node produce thermal load
+            if (elem_phase(ie,je,ke) == PHASE_POWDER) cycle
 
             Mth_loc = Mth_solid
 
@@ -448,7 +467,7 @@ contains
       do ke = 1 + kc, Nz, 2
         do je = 1 + jc, Ny, 2
           do ie = 1 + ic, Nx, 2
-            if (elem_phase(ie,je,ke) /= PHASE_SOLID) cycle
+            if (elem_phase(ie,je,ke) == PHASE_POWDER) cycle
 
             Mth_loc = Mth_solid
 
@@ -578,7 +597,7 @@ contains
     call compute_elem_phases(phase)
 
     ! 2. Assemble incremental thermal RHS (dT since last mech solve)
-    call assemble_thermal_rhs(T_new, fx, fy, fz)
+    call assemble_thermal_rhs(T_new, phase, fx, fy, fz)
 
     ! 3. Solve for displacement INCREMENT, then accumulate
     dux = 0.0_dp; duy = 0.0_dp; duz = 0.0_dp

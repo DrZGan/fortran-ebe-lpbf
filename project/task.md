@@ -467,8 +467,8 @@ Requires runtime Ke computation at plastic GPs.
 
 | Step | Fix | Expected error after | Speed | Checkpoint |
 |------|-----|---------------------|-------|------------|
-| 0 (current) | — | σ_xx: 1.75×, \|u\|: 11% | 120 ms/step | — |
-| 1 | Per-GP phase Ke | σ_xx: ~1.2×, \|u\|: ~8% | 120 ms/step | σ_xx ratio < 1.3 |
-| 2 | Newton with σ_old | σ_xx: ~1.1×, \|u\|: ~3% | ~400 ms/step | \|u\| ratio 0.95-1.05 |
-| 3 | GP-centered phase | σ_xx: ~1.05×, \|u\|: ~2% | ~400 ms/step | Phase count match |
-| 4 | Plastic tangent | σ_xx: ~1.02×, \|u\|: ~1% | ~500 ms/step | Only if needed |
+| 0 (current) | — | σ_xx: 1.71×, \|u\|: 11%, f+: 5.6% | 120 ms/step | — |
+| 1 | ~~Per-GP phase Ke~~ | ❌ FAILED — creates stiffness/stress inconsistency at MIXED boundary, amplifies error | — | Reverted |
+| 2 | Newton with σ_old | σ_xx: ~1.1×, \|u\|: ~3% | ~400 ms/step | **DO NEXT** |
+| 3 | GP-centered phase | Minor improvement | ~400 ms/step | After Step 2 |
+| 4 | Plastic tangent | <1% improvement | ~500 ms/step | Only if needed |
