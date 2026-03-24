@@ -318,13 +318,13 @@ To ensure FDM and FEM solve the same equations and produce the same results:
 ### 5.1 Performance Comparison (Final, P=100W, 500 steps)
 | Metric | JAX-FEM (GPU) | Fortran EBE+Newton (20-thread OpenMP) | Speedup |
 |--------|---------------|---------------------------------------|---------|
-| **Total wall time** | 374.5 s | 60.2 s | **6.2×** |
-| **Peak memory** | 4,889 MB | 8 MB | **611×** |
-| Thermal total | 252.5 s | 0.7 s | **361×** |
+| **Total wall time** | 374 s | 19 s | **20×** |
+| **Peak memory** | 4,882 MB | 8 MB | **611×** |
+| Thermal total | 253 s | 0.7 s | **361×** |
 | Thermal per step | 505 ms | 1.4 ms | **361×** |
-| Mechanical total | 85.3 s | 57.1 s | **1.5×** |
-| Mechanical per step | 1,706 ms | 1,142 ms | **1.5×** |
-| Overhead (JIT/IO) | 36.7 s | 2.4 s | **15×** |
+| Mechanical total | 85 s | 16 s | **5.3×** |
+| Mechanical per step | 1,706 ms | 320 ms | **5.3×** |
+| Overhead (JIT/IO) | 37 s | 2.6 s | **14×** |
 
 ### 5.2 Accuracy Comparison
 | Field | Metric | Result |
