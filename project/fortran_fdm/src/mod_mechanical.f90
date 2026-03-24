@@ -839,7 +839,6 @@ contains
 
     real(dp) :: Rx(Nnx,Nny,Nnz), Ry(Nnx,Nny,Nnz), Rz(Nnx,Nny,Nnz)
     real(dp) :: dux(Nnx,Nny,Nnz), duy(Nnx,Nny,Nnz), duz(Nnx,Nny,Nnz)
-    real(dp) :: neg_Rx(Nnx,Nny,Nnz), neg_Ry(Nnx,Nny,Nnz), neg_Rz(Nnx,Nny,Nnz)
     real(dp) :: dT_gp_arr(8, Nx, Ny, Nz)
     real(dp) :: R_norm, R_norm0
     integer  :: newton_iter
@@ -847,28 +846,22 @@ contains
     ! 1. Compute element phases
     call compute_elem_phases(phase)
 
-    ! 2. Compute dT at GP level (interpolate from nodes)
+    ! 2. Compute dT at GP level
     call compute_dT_gp(T_new, dT_gp_arr)
 
     ! 3. Newton iteration
     R_norm0 = 0.0_dp
     do newton_iter = 1, newton_maxiter
-      ! Compute residual: R = sum_elem sum_gp B^T * sigma * detJ
       call compute_residual(ux, uy, uz, dT_gp_arr, phase, Rx, Ry, Rz)
 
       R_norm = sqrt(sum(Rx**2) + sum(Ry**2) + sum(Rz**2))
       if (newton_iter == 1) R_norm0 = R_norm
+      if (R_norm / max(R_norm0, 1.0e-30_dp) < newton_tol) exit
 
-      if (R_norm / max(R_norm0, 1.0e-30_dp) < newton_tol) then
-        write(*,'(A,I2,A,ES9.2)') '    Newton converged iter=', newton_iter, ' R/R0=', R_norm/max(R_norm0,1e-30_dp)
-        exit
-      end if
-
-      ! Solve K * du = -R using elastic K as Jacobian via EBE CG
+      ! Solve K * du = -R (negate R in-place to avoid temp array)
+      Rx = -Rx; Ry = -Ry; Rz = -Rz
       dux = 0.0_dp; duy = 0.0_dp; duz = 0.0_dp
-      neg_Rx = -Rx; neg_Ry = -Ry; neg_Rz = -Rz
-      call solve_mech_cg(dux, duy, duz, neg_Rx, neg_Ry, neg_Rz, phase)
-
+      call solve_mech_cg(dux, duy, duz, Rx, Ry, Rz, phase)
       ux = ux + dux; uy = uy + duy; uz = uz + duz
     end do
 
