@@ -626,13 +626,11 @@ contains
             f_plus_elem(g) = f_yield_g
           end do
 
-          ! Scatter f_plus to nearest node for each GP
+          ! Store element-level f_plus for later scatter
+          ! (cannot scatter here safely with collapse(3) — use separate loop)
           do g = 1, 8
-            di = mod(g-1, 2)
-            dj = mod((g-1)/2, 2)
-            dk = (g-1) / 4
-            !$omp atomic
-            f_plus(ie+di, je+dj, ke+dk) = f_plus(ie+di, je+dj, ke+dk) + f_plus_elem(g)
+            ! Store max f_plus per element for output
+            ! We'll scatter in a separate 8-color loop below
           end do
 
         end do
@@ -640,11 +638,36 @@ contains
     end do
     !$omp end parallel do
 
-    ! Average f_plus: each interior node is shared by up to 8 elements
-    ! For simplicity, we leave the accumulated value (proportional to yield excess)
-    ! Normalize by dividing by the number of contributing GPs per node
-    ! Corner nodes: 1, edge: 2, face: 4, interior: 8
-    ! Use a simple approach: just keep the sum (user can normalize if needed)
+    ! Scatter f_plus to nodes using 8-color coloring (race-free)
+    block
+      integer :: color2, ic2, jc2, kc2
+      f_plus = 0.0_dp
+      do color2 = 0, 7
+        ic2 = mod(color2, 2); jc2 = mod(color2/2, 2); kc2 = mod(color2/4, 2)
+        !$omp parallel do collapse(3) default(shared) private(ie,je,ke,g,di,dj,dk)
+        do ke = 1+kc2, Nz, 2
+          do je = 1+jc2, Ny, 2
+            do ie = 1+ic2, Nx, 2
+              do g = 1, 8
+                di = mod(g-1,2); dj = mod((g-1)/2,2); dk = (g-1)/4
+                ! Compute f_yield from stored GP stress
+                block
+                  real(dp) :: sm, sd(6), sn, fy
+                  sm = (sig_gp(1,g,ie,je,ke)+sig_gp(2,g,ie,je,ke)+sig_gp(3,g,ie,je,ke))/3.0_dp
+                  sd(1)=sig_gp(1,g,ie,je,ke)-sm; sd(2)=sig_gp(2,g,ie,je,ke)-sm; sd(3)=sig_gp(3,g,ie,je,ke)-sm
+                  sd(4)=sig_gp(4,g,ie,je,ke); sd(5)=sig_gp(5,g,ie,je,ke); sd(6)=sig_gp(6,g,ie,je,ke)
+                  sn = sqrt(1.5_dp*(sd(1)**2+sd(2)**2+sd(3)**2+2.0_dp*(sd(4)**2+sd(5)**2+sd(6)**2)))
+                  fy = max(sn - sig_yield, 0.0_dp)
+                  f_plus(ie+di,je+dj,ke+dk) = max(f_plus(ie+di,je+dj,ke+dk), fy)
+                end block
+              end do
+            end do
+          end do
+        end do
+        !$omp end parallel do
+      end do
+      ! f_plus now contains the MAX yield excess at each node
+    end block
 
   end subroutine update_gp_state
 
